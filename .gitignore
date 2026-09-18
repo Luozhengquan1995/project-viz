@@ -1,0 +1,36 @@
+# Private runtime state must never be committed.
+.project-viz/
+.project-viz-state/
+.project-viz-install.json
+state/
+private/
+logs/
+sessions/
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+*.jsonl
+access-token
+token
+*.pid
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Generated artifacts and local environments.
+dist/
+build/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Project Viz"
+  short_description: "Build a persistent visual work tree for a Codex project"
+  default_prompt: "Use $project-viz to open a project overview, organize its real work and evidence, and track further progress."
+policy:
+  allow_implicit_invocation: true

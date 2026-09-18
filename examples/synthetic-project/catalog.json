@@ -1,0 +1,52 @@
+{
+  "project": {
+    "title": "Synthetic inventory importer",
+    "goal": "Import an inventory CSV with traceable validation."
+  },
+  "nodes": [
+    {
+      "id": "data-import",
+      "kind": "task",
+      "label": "Build inventory import",
+      "summary": "The input contract is documented; validation needs a correction.",
+      "detail": "This graph is a synthetic example. Work can contain meaningful subtasks without any predefined stages.",
+      "execution_state": "running",
+      "outcome": "unverified",
+      "evidence": [{"path": "PLAN.md", "line": 3, "note": "Synthetic project objective"}],
+      "sources": []
+    },
+    {
+      "id": "input-contract",
+      "parentId": "data-import",
+      "kind": "task",
+      "label": "Document expected fields",
+      "summary": "The synthetic plan identifies required field and identifier checks.",
+      "execution_state": "finished",
+      "outcome": "passed",
+      "evidence": [{"path": "PLAN.md", "line": 5, "note": "Documentation-only scope"}],
+      "sources": []
+    },
+    {
+      "id": "import-validation",
+      "parentId": "data-import",
+      "kind": "task",
+      "label": "Validate imported records",
+      "summary": "Synthetic acceptance failed: duplicate identifiers remain.",
+      "detail": "A finished check with a failed outcome is distinct from a successful work item. Keep this record when a later retry passes.",
+      "execution_state": "finished",
+      "outcome": "failed",
+      "evidence": [{"path": "reports/import-validation.md", "line": 3, "note": "Hand-authored failed-result fixture"}],
+      "sources": []
+    },
+    {
+      "id": "import-summary",
+      "kind": "task",
+      "label": "Show the import summary",
+      "summary": "Planned after import acceptance; no implementation claimed.",
+      "execution_state": "planned",
+      "outcome": "unverified",
+      "evidence": [{"path": "PLAN.md", "line": 7}],
+      "sources": []
+    }
+  ]
+}
