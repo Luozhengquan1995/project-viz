@@ -24,7 +24,7 @@ python tools/install_skill.py --destination /path/to/skills/project-viz
 
 Existing destinations are refused unless `--replace` is supplied. Replacement retains a sibling backup, including any pre-existing files, and never changes project runtime state or global instructions. Installation may require refreshing your Codex skill list or opening a new session, depending on the host.
 
-The GitHub repository is currently **private**: [Luozhengquan1995/project-viz](https://github.com/Luozhengquan1995/project-viz). With repository access and GitHub authentication configured, clone it and run the installer:
+The GitHub repository is **public**: [Luozhengquan1995/project-viz](https://github.com/Luozhengquan1995/project-viz). No GitHub login is required to clone it and run the installer:
 
 ```sh
 git clone https://github.com/Luozhengquan1995/project-viz.git
