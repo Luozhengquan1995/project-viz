@@ -38,9 +38,9 @@ The installed `skills/project-viz` directory is self-contained; it has no runtim
 
 > Use $project-viz to organize this project's existing work and evidence, open its visual overview, and track further progress.
 
-Codex identifies the project, initializes its overall title and goal, starts the local viewer, and returns the actual browser URL. It reads project documents and bounded normalized history to curate meaningful themes. Empty projects do not receive invented stages or placeholder research plans.
+Codex identifies the project, initializes its overall title and goal, starts the local viewer, and returns the actual browser URL. For a remote project, it also generates the SSH command to run on your own computer. It reads project documents and bounded normalized history to curate meaningful themes. Empty projects do not receive invented stages or placeholder research plans.
 
-On a remote machine, the browser needs an authorized port-forwarding route. The service defaults to loopback; a local viewer is not a request to publish your files.
+The service listens on `127.0.0.1` by default. For a project on another machine, follow [Open a remote project in your local browser](#open-a-remote-project-in-your-local-browser).
 
 ## Use the CLI directly
 
@@ -55,7 +55,9 @@ python skills/project-viz/scripts/project_viz.py status --project /path/to/proje
 python skills/project-viz/scripts/project_viz.py stop --project /path/to/project
 ```
 
-`start` runs in the background by default; add `--foreground` for a terminal or supervisor, or `--open` to open the returned URL. Every command accepts optional `--state-dir` for the exact private project-state directory and `--codex-home` for source discovery. Use the same overrides on subsequent commands. Responses are JSON.
+`start` runs in the background by default; add `--foreground` for a terminal or supervisor. When the browser is on the same machine, `--open` opens the returned URL there. Project commands accept optional `--state-dir` for the exact private project-state directory and `--codex-home` for source discovery. Use the same overrides on subsequent project commands. Responses are JSON.
+
+After a runtime update, `start` replaces an older matching viewer while preserving project history and, by default, its server port. Generate a fresh access plan afterward; connection files identify a particular viewer instance.
 
 For reviewed history and ongoing semantic updates:
 
@@ -68,6 +70,47 @@ python skills/project-viz/scripts/project_viz.py export --project /path/to/proje
 
 `emit` also accepts JSON from stdin. Catalog imports atomically upsert records and retain omitted work. [The work protocol](skills/project-viz/references/work-protocol.md) defines field names, source binding, state semantics, and examples. [The synthetic project](examples/synthetic-project/README.md) provides a runnable catalog fixture without private logs.
 
+## Open a remote project in your local browser
+
+On the **remote server**, start the viewer with the SSH destination you use from your own computer:
+
+```sh
+python skills/project-viz/scripts/project_viz.py start --project /path/to/project --port 0 --ssh-target user@host_or_alias --ssh-port 22 --local-port 8894
+```
+
+The response includes an `access` object with `sshCommand`, `powershellCommand`, and `browserUrl`. If you omit `--ssh-target` in an SSH session, Project Viz can infer the server IP and SSH port from `SSH_CONNECTION`. This inferred address may not be reachable from your computer; use `--ssh-target` to supply a reachable host or an alias from your local SSH configuration. For jump hosts and other complex routes, use that SSH alias. SSH uses your local OpenSSH configuration and authentication; Project Viz does not store SSH passwords.
+
+The simplest local workflow needs an OpenSSH client, with no local Python or Skill installation:
+
+1. On the **computer running your browser**, paste the returned `sshCommand` into a terminal. On Windows, paste `powershellCommand` into PowerShell.
+2. Keep that terminal open, then open the returned `browserUrl` in your local browser.
+3. Press Ctrl+C in the terminal to close the forwarding connection when finished. The viewer keeps running on the server.
+
+The SSH command must run on your computer. A server-side agent cannot create a tunnel on your computer, and the server's localhost URL alone does not provide local browser access. Forwarding listens only on local `127.0.0.1` by default.
+
+For an already running viewer, generate or update the plan **on the server** without restarting it:
+
+```sh
+python skills/project-viz/scripts/project_viz.py access --project /path/to/project --ssh-target my-server --local-port 8894
+python skills/project-viz/scripts/project_viz.py status --project /path/to/project
+```
+
+Use `--ssh-port 22` when selecting the SSH port explicitly; otherwise the local SSH configuration can supply it. `status` includes the configured access plan. If the selected local port is occupied, choose another port with `access --local-port PORT` and use the newly returned command and URL.
+
+If the Skill is also installed on your computer, the optional `tunnel` helper starts SSH, verifies that the forwarded service matches the plan, and opens your browser. First save a plan **on the server**:
+
+```sh
+python skills/project-viz/scripts/project_viz.py access --project /path/to/project --ssh-target my-server --local-port 8894 --output /path/to/private/project-viz-access.json
+```
+
+The JSON file contains the viewer access token. Copy it privately to your computer and keep it out of commits and shared artifacts. Then run **on your computer**, using the local installed Skill path:
+
+```sh
+python /path/to/skill/scripts/project_viz.py tunnel --file /path/to/copied-access.json --open
+```
+
+The helper stays in the foreground; keep its terminal open. Add `--local-port 0` to choose an available port on your computer and print the updated browser URL. Ctrl+C closes only the SSH forwarding connection; stop the remote viewer separately with `stop --project /path/to/project` when desired.
+
 ## What stays visible
 
 The graph represents an overall project, its actual work themes, and optional stages or key subtasks. Tool calls, waiting, file operations, and detailed logs sit inside work details. Navigation, search, and following activity operate on the same project tree, preserving other branches and historical work.
@@ -78,7 +121,7 @@ A stable `work_id` identifies an objective across title changes and sessions. `e
 
 - Passive collection runs while the service is alive and associated source records are available. Import coverage and parsing gaps matter; a bounded pass does not promise complete historical recovery.
 - Precise semantic organization is performed by the current Codex conversation, using project documents and public context. The collector makes no background model calls and cannot reliably infer every historical objective.
-- Installing the skill does not force all future conversations to load it. v0.1 does not implement Hooks or automatic checkpoint injection. Explicit checkpoints improve continuity when the skill is being used.
+- Installing the skill does not force all future conversations to load it. v0.2 does not implement Hooks or automatic checkpoint injection. Explicit checkpoints improve continuity when the skill is being used.
 - A project-level `AGENTS.md` reporting block is optional and added only when requested. Global instructions are not changed by the installer.
 - Runtime state, access credentials, cursors, and logs are private per-project data. They are excluded from release builds. Curated exports exclude full raw logs, but summaries and evidence can still be sensitive; review them before sharing.
 - The viewer observes work. It does not schedule experiments, resume Codex threads, or publish a project.
@@ -87,7 +130,7 @@ A stable `work_id` identifies an objective across title changes and sessions. `e
 
 ```sh
 python -m unittest discover -s tests -p 'test_*.py'
-python tools/build_release.py --version 0.1.0 --output-dir dist
+python tools/build_release.py --version 0.2.0 --output-dir dist
 ```
 
 The browser regression uses optional Playwright and Chromium; it skips when those development dependencies are unavailable. The CI template defines a separate Linux browser job that installs them. They are not runtime dependencies.

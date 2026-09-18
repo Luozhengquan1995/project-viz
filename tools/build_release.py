@@ -126,7 +126,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--output-dir', type=Path, default=Path('dist'))
-    parser.add_argument('--version', default='0.1.0')
+    parser.add_argument('--version', default='0.2.0')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?', args.version):
         parser.error('version must be a semantic version without path characters')

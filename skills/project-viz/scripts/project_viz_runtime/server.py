@@ -97,7 +97,13 @@ class _Handler(BaseHTTPRequestHandler):
             return False
 
     def _local_host(self):
-        return self.headers.get("Host", "").lower() in self.server.allowed_hosts
+        # SSH preserves the browser's Host header, including its local port.
+        # Accept only literal loopback hosts, without requiring equal ports.
+        hosts = self.headers.get_all("Host", [])
+        if len(hosts) != 1:
+            return False
+        match = re.fullmatch(r"(?:127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?", hosts[0], re.I)
+        return bool(match and (match[1] is None or 1 <= int(match[1]) <= 65535))
 
     def _origin_allowed(self):
         origin = self.headers.get("Origin")
@@ -237,7 +243,6 @@ def serve(ctx, host="127.0.0.1", port=0):
             httpd.collector, httpd.store = collector, store
             httpd.collector_mutex, httpd.stopping = mutex, stop
             httpd.runtime_errors = []
-            httpd.allowed_hosts = {f"127.0.0.1:{httpd.server_port}", f"localhost:{httpd.server_port}"}
 
             def monitor():
                 while not stop.is_set():

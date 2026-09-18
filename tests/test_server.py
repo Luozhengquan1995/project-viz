@@ -196,6 +196,24 @@ class ServerTests(unittest.TestCase):
             serve(self.ctx)
         self.assertEqual(self.request("/api/health", bearer=True)[0], 200)
 
+    def test_forwarded_host_accepts_local_port_but_rejects_other_hosts_and_origins(self):
+        self.start()
+        local_port = 8894 if self.descriptor['port'] != 8894 else 8895
+        for host in [f'127.0.0.1:{local_port}', f'localhost:{local_port}', f'[::1]:{local_port}', 'localhost']:
+            self.assertEqual(self.request('/api/health', bearer=True, headers={'Host': host})[0], 200, host)
+            status, headers, _ = self.request('/?token=' + self.token, headers={'Host': host})
+            self.assertEqual(status, 302)
+            self.assertEqual(headers['Location'], '/')
+            cookie = headers['Set-Cookie'].split(';', 1)[0]
+            self.assertEqual(self.request('/api/tree', cookie=cookie, headers={'Host': host})[0], 200)
+            self.assertEqual(self.request('/api/import-history', 'POST', {'seconds': 0}, bearer=True,
+                                          headers={'Host': host, 'Origin': 'http://' + host})[0], 200)
+        for host in ['localhost.evil.example:8894', '127.0.0.1.evil.example:8894', '0.0.0.0:8894',
+                     '127.0.0.1:0', '127.0.0.1:65536', 'user@localhost:8894', 'localhost:8894/path']:
+            self.assertEqual(self.request('/api/health', bearer=True, headers={'Host': host})[0], 403, host)
+        self.assertEqual(self.request('/api/import-history', 'POST', {'seconds': 0}, bearer=True,
+                                      headers={'Host': f'localhost:{local_port}', 'Origin': f'http://localhost:{local_port + 1}'})[0], 403)
+
     def test_shutdown_does_not_delete_another_instance_descriptor(self):
         self.start()
         foreign = {**self.descriptor, "instanceId": "replacement-instance"}

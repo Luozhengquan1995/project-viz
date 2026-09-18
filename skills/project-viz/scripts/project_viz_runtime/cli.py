@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 from contextlib import closing
+import getpass
+import ipaddress
 import json
 import math
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import time
 import urllib.error
@@ -59,7 +62,7 @@ def running(ctx):
     except (OSError, ValueError, urllib.error.URLError):
         return None
     if result.get('projectId') == ctx['config']['projectId'] and result.get('instanceId') == descriptor.get('instanceId'):
-        return descriptor
+        return {**descriptor, 'version': result.get('version')}
     return None
 
 
@@ -68,12 +71,67 @@ def address(ctx, descriptor):
     return f"http://127.0.0.1:{descriptor['port']}/?token=" + urllib.parse.quote(token, safe='')
 
 
+def configure_access(ctx, args):
+    """Save connection coordinates, never an SSH password or a browser token."""
+    saved = ctx['config'].get('remoteAccess', {})
+    settings = dict(saved)
+    target = getattr(args, 'ssh_target', None)
+    if target:
+        settings = {'sshTarget': target, 'sshPort': None, 'inferred': False,
+                    'localPort': saved.get('localPort')}
+    elif not settings:
+        connection = os.environ.get('SSH_CONNECTION', '').split()
+        if len(connection) == 4:
+            try:
+                server = ipaddress.ip_address(connection[2])
+                port = int(connection[3])
+                if not 0 < port < 65536:
+                    raise ValueError('Invalid SSH port')
+                settings = {'sshTarget': getpass.getuser() + '@' + str(server),
+                            'sshPort': port, 'localPort': None, 'inferred': True}
+            except ValueError:
+                pass
+    for key, flag in [('localPort', 'local_port'), ('sshPort', 'ssh_port')]:
+        if getattr(args, flag, None) is not None:
+            settings[key] = getattr(args, flag)
+    if settings and not settings.get('sshTarget'):
+        raise ValueError('Provide --ssh-target with --local-port or --ssh-port')
+    if settings:
+        from .tunnel import make_plan
+        # Validate before starting a service or modifying configuration.
+        make_plan({'projectId': ctx['config']['projectId'], 'instanceId': 'validation', 'port': 8080},
+                  'x' * 43, settings['sshTarget'], settings.get('localPort'), settings.get('sshPort'))
+        with state_lock(ctx['state'], 'setup'):
+            update_config(ctx, {'remoteAccess': settings})
+    return settings
+
+
+def access_plan(ctx, descriptor):
+    settings = ctx['config'].get('remoteAccess')
+    if not settings:
+        return None
+    from .tunnel import make_plan
+    token = (ctx['state'] / 'access-token').read_text(encoding='utf-8').strip()
+    plan = make_plan(descriptor, token, settings['sshTarget'], settings.get('localPort'), settings.get('sshPort'))
+    plan['inferredTarget'] = bool(settings.get('inferred'))
+    plan['runOn'] = 'The local computer where you open the browser'
+    if plan['inferredTarget']:
+        plan['note'] = 'SSH target inferred from this session; override --ssh-target if you use an alias, jump host, or a different reachable address.'
+    return plan
+
+
 def status(ctx):
     descriptor = running(ctx)
     result = {'initialized': True, 'running': bool(descriptor), 'projectId': ctx['config']['projectId'],
               'title': ctx['config']['title'], 'stateDir': str(ctx['state']), 'version': __version__}
     if descriptor:
-        result.update(instanceId=descriptor['instanceId'], pid=descriptor['pid'], port=descriptor['port'], url=address(ctx, descriptor))
+        result.update(instanceId=descriptor['instanceId'], pid=descriptor['pid'], port=descriptor['port'], serverVersion=descriptor.get('version'), url=address(ctx, descriptor))
+        plan = access_plan(ctx, descriptor)
+        if plan:
+            result.update(access=plan, serverUrl=result['url'], url=plan['browserUrl'], urlLocation='local-computer-after-forwarding')
+        else:
+            result['urlLocation'] = 'computer-running-the-viewer'
+            result['remoteAccessHint'] = 'For a remote server, run access --ssh-target YOUR_SSH_ALIAS to get a local forwarding command and browser URL.'
     return result
 
 
@@ -82,7 +140,7 @@ def start(ctx, args):
         raise ValueError('This version binds only to loopback; use an authorized SSH tunnel for remote viewing')
     if args.foreground:
         from .server import serve
-        if args.open:
+        if args.open and not ctx['config'].get('remoteAccess'):
             import threading
             def open_when_ready():
                 for _ in range(100):
@@ -96,6 +154,13 @@ def start(ctx, args):
         return {'running': False, 'stopped': True}
     with state_lock(ctx['state'], 'start', timeout=15):
         live = running(ctx)
+        upgraded = bool(live and live.get('version') != __version__)
+        if upgraded:
+            old_port = live['port']
+            _stop_instance(ctx, live)
+            if args.port == 0:
+                args.port = old_port
+            live = None
         reused = bool(live)
         if not live:
             script = Path(__file__).resolve().parents[1] / 'project_viz.py'
@@ -120,9 +185,24 @@ def start(ctx, args):
                 raise RuntimeError('Viewer startup has not completed; run status and inspect ' + str(ctx['state'] / 'server.log'))
         result = status(ctx)
         result['reused'] = reused
-        if args.open:
+        result['restartedForUpgrade'] = upgraded
+        if args.open and 'access' not in result:
             webbrowser.open(result['url'])
         return result
+
+
+def _stop_instance(ctx, live):
+    request(ctx, live, '/api/shutdown', {'instanceId': live['instanceId']})
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        current = endpoint(ctx)
+        if (not current or current.get('instanceId') != live['instanceId']) and not running(ctx):
+            # Descriptor cleanup precedes collector lease release by a few lines.
+            with state_lock(ctx['state'], 'collector', timeout=2):
+                pass
+            return {'running': False, 'stopped': True, 'instanceId': live['instanceId']}
+        time.sleep(.1)
+    raise RuntimeError('Shutdown requested; matching viewer has not yet stopped')
 
 
 def stop(ctx):
@@ -130,13 +210,7 @@ def stop(ctx):
         live = running(ctx)
         if not live:
             return {'running': False, 'stopped': False, 'message': 'No matching viewer is running'}
-        request(ctx, live, '/api/shutdown', {'instanceId': live['instanceId']})
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
-            if not running(ctx):
-                return {'running': False, 'stopped': True, 'instanceId': live['instanceId']}
-            time.sleep(.1)
-        raise RuntimeError('Shutdown requested; matching viewer has not yet stopped')
+        return _stop_instance(ctx, live)
 
 
 def read_payload(filename):
@@ -214,6 +288,7 @@ def doctor(args):
             'sources': {name: (codex_home / name).is_dir() for name in ('sessions', 'archived_sessions')},
             'databaseCandidates': [p.name for p in codex_home.glob('state_*.sqlite') if p.is_file()] if codex_home.is_dir() else [],
             'runtimeDependencies': 'Python standard library',
+            'sshClientAvailable': bool(shutil.which('ssh')),
             'notes': ['Source availability does not prove import coverage. Use import-history to inspect coverage.',
                       'No source database or session log is modified. No background model calls.']}
 
@@ -251,8 +326,12 @@ def parser():
     common.add_argument('--state-dir', help='Exact private state directory for this project')
     common.add_argument('--codex-home', help='Codex source home (default: CODEX_HOME or ~/.codex)')
     commands = cli.add_subparsers(dest='command', required=True)
-    for name in ['doctor', 'init', 'start', 'status', 'stop', 'import-history', 'emit', 'catalog', 'context', 'export']:
+    for name in ['doctor', 'init', 'start', 'status', 'stop', 'import-history', 'emit', 'catalog', 'context', 'export', 'access']:
         command = commands.add_parser(name, parents=[common])
+        if name in {'start', 'access'}:
+            command.add_argument('--ssh-target', help='SSH alias or user@server reachable from the local computer')
+            command.add_argument('--ssh-port', type=int, help='SSH port; omitted uses the local SSH configuration')
+            command.add_argument('--local-port', type=int, help='Browser computer port; defaults to the viewer port')
         if name == 'init':
             command.add_argument('--title')
             command.add_argument('--goal')
@@ -271,11 +350,21 @@ def parser():
             command.add_argument('--work-offset', type=int, default=0, help='Work page offset (200 works per page)')
         elif name == 'export':
             command.add_argument('--output', required=True)
+        elif name == 'access':
+            command.add_argument('--output', help='Optional private JSON connection file to copy to the browser computer')
+    tunnel = commands.add_parser('tunnel', help='Run on the browser computer to forward a remote viewer over SSH')
+    tunnel.add_argument('--file', required=True, help='Connection JSON written by the remote access command')
+    tunnel.add_argument('--local-port', type=int, help='Override local port; zero selects a free port')
+    tunnel.add_argument('--open', action='store_true', help='Open browser after verifying the forwarded service')
+    tunnel.add_argument('--timeout', type=float, default=30, help='Connection and authentication timeout in seconds')
     return cli
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command == 'tunnel':
+        from .tunnel import run_tunnel
+        return run_tunnel(read_payload(args.file), local_port=args.local_port, open_browser=args.open, timeout=args.timeout)
     if args.command == 'doctor':
         return doctor(args)
     try:
@@ -294,7 +383,23 @@ def main(argv=None):
     if args.command == 'start':
         if not 0 <= args.port < 65536:
             raise ValueError('Invalid port')
+        configure_access(ctx, args)
         return start(ctx, args)
+    if args.command == 'access':
+        live = running(ctx)
+        if not live:
+            raise RuntimeError('Start this project viewer before preparing remote access')
+        configure_access(ctx, args)
+        plan = access_plan(ctx, live)
+        if plan is None:
+            raise ValueError('Provide --ssh-target with an SSH alias or user@server reachable from your local computer')
+        if args.output:
+            output = Path(args.output).expanduser().resolve()
+            if output.suffix.lower() != '.json' or output.is_relative_to(ctx['state']):
+                raise ValueError('Choose a JSON connection file outside private runtime state')
+            atomic_json(output, plan)
+            plan['output'] = str(output)
+        return plan
     if args.command == 'status':
         return status(ctx)
     if args.command == 'stop':
